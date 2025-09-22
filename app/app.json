@@ -52,8 +52,7 @@
         {
           "microphonePermission": "Allow $(PRODUCT_NAME) to access your microphone."
         }
-      ],
-      "@react-native-voice/voice"
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

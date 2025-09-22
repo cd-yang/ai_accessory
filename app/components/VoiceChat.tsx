@@ -1,8 +1,7 @@
 import { useThemeColor } from '@/hooks/use-theme-color';
-import VoiceService, { Message } from '@/services/VoiceService';
-import VoiceServiceExpo from '@/services/VoiceServiceExpo';
+import VoiceServiceInstance, { Message } from '@/services/VoiceService';
 import { Ionicons } from '@expo/vector-icons';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
@@ -26,30 +25,13 @@ export default function VoiceChat({ onClose }: VoiceChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isListening, setIsListening] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [useExpoVoice, setUseExpoVoice] = useState(true); // 默认使用 Expo 兼容方案
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const flatListRef = useRef<FlatList>(null);
 
-  const backgroundColor = useThemeColor({}, 'background');
   const textColor = useThemeColor({}, 'text');
   const tintColor = useThemeColor({}, 'tint');
 
-  useEffect(() => {
-    loadConversationHistory();
-    return () => {
-      VoiceService.destroy();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (isListening) {
-      startPulseAnimation();
-    } else {
-      stopPulseAnimation();
-    }
-  }, [isListening]);
-
-  const startPulseAnimation = () => {
+  const startPulseAnimation = useCallback(() => {
     Animated.loop(
       Animated.sequence([
         Animated.timing(pulseAnim, {
@@ -64,27 +46,41 @@ export default function VoiceChat({ onClose }: VoiceChatProps) {
         }),
       ])
     ).start();
-  };
+  }, [pulseAnim]);
 
-  const stopPulseAnimation = () => {
+  const stopPulseAnimation = useCallback(() => {
     pulseAnim.stopAnimation();
     Animated.timing(pulseAnim, {
       toValue: 1,
       duration: 200,
       useNativeDriver: true,
     }).start();
-  };
+  }, [pulseAnim]);
 
-  const loadConversationHistory = async () => {
+  const loadConversationHistory = useCallback(async () => {
     try {
-      const voiceServiceToUse = useExpoVoice ? VoiceServiceExpo : VoiceService;
-      const history = await voiceServiceToUse.getConversationHistory();
+      const history = await VoiceServiceInstance.getConversationHistory();
       setMessages(history);
       scrollToBottom();
     } catch (error) {
       console.error('加载对话历史失败:', error);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    loadConversationHistory();
+    return () => {
+      VoiceServiceInstance.destroy();
+    };
+  }, [loadConversationHistory]);
+
+  useEffect(() => {
+    if (isListening) {
+      startPulseAnimation();
+    } else {
+      stopPulseAnimation();
+    }
+  }, [isListening, startPulseAnimation, stopPulseAnimation]);
 
   const scrollToBottom = () => {
     setTimeout(() => {
@@ -97,39 +93,31 @@ export default function VoiceChat({ onClose }: VoiceChatProps) {
       if (isListening) {
         // 停止录音
         setIsListening(false);
-        if (useExpoVoice) {
-          const audioUri = await VoiceServiceExpo.stopRecording();
-          if (audioUri) {
-            setIsLoading(true);
-            try {
-              const text = await VoiceServiceExpo.convertSpeechToText(audioUri);
-              if (text.trim()) {
-                await handleSpeechResult(text);
-              }
-            } catch (error) {
-              console.error('语音识别失败:', error);
-              Alert.alert('提示', '这是语音识别的模拟结果，请集成真实的语音识别服务');
-            } finally {
-              setIsLoading(false);
+        const audioUri = await VoiceServiceInstance.stopRecording();
+        if (audioUri) {
+          setIsLoading(true);
+          try {
+            const text = await VoiceServiceInstance.convertSpeechToText(audioUri);
+            if (text.trim()) {
+              await handleSpeechResult(text);
             }
+          } catch (error) {
+            console.error('语音识别失败:', error);
+            Alert.alert('提示', '语音识别失败，请稍后再试');
+          } finally {
+            setIsLoading(false);
           }
-        } else {
-          await VoiceService.stopSpeechRecognition();
         }
       } else {
         // 开始录音
         setIsListening(true);
-        if (useExpoVoice) {
-          await VoiceServiceExpo.startRecording();
-          // 3秒后自动停止录音
-          setTimeout(() => {
-            if (isListening) {
-              handleVoicePress();
-            }
-          }, 3000);
-        } else {
-          await VoiceService.startSpeechRecognition(handleSpeechResult);
-        }
+        await VoiceServiceInstance.startRecording();
+        // 3秒后自动停止录音
+        setTimeout(() => {
+          if (isListening) {
+            handleVoicePress();
+          }
+        }, 3000);
       }
     } catch (error) {
       console.error('语音操作失败:', error);
@@ -154,12 +142,11 @@ export default function VoiceChat({ onClose }: VoiceChatProps) {
       const updatedMessages = [...messages, userMessage];
       setMessages(updatedMessages);
 
-      const voiceServiceToUse = useExpoVoice ? VoiceServiceExpo : VoiceService;
-      await voiceServiceToUse.saveMessage(userMessage);
+      await VoiceServiceInstance.saveMessage(userMessage);
       scrollToBottom();
 
       // 调用豆包API获取回复
-      const aiResponse = await voiceServiceToUse.callDoubaoAPI(text, messages);
+      const aiResponse = await VoiceServiceInstance.callDoubaoAPI(text, messages);
 
       // 保存AI回复
       const aiMessage: Message = {
@@ -171,11 +158,11 @@ export default function VoiceChat({ onClose }: VoiceChatProps) {
 
       const finalMessages = [...updatedMessages, aiMessage];
       setMessages(finalMessages);
-      await voiceServiceToUse.saveMessage(aiMessage);
+      await VoiceServiceInstance.saveMessage(aiMessage);
       scrollToBottom();
 
       // 播放AI回复语音
-      await voiceServiceToUse.textToSpeech(aiResponse);
+      await VoiceServiceInstance.textToSpeech(aiResponse);
 
     } catch (error) {
       console.error('处理语音结果时出错:', error);
@@ -195,8 +182,7 @@ export default function VoiceChat({ onClose }: VoiceChatProps) {
           text: '确定',
           style: 'destructive',
           onPress: async () => {
-            const voiceServiceToUse = useExpoVoice ? VoiceServiceExpo : VoiceService;
-            await voiceServiceToUse.clearConversationHistory();
+            await VoiceServiceInstance.clearConversationHistory();
             setMessages([]);
           },
         },
@@ -237,16 +223,6 @@ export default function VoiceChat({ onClose }: VoiceChatProps) {
       <View style={[styles.header, { borderBottomColor: '#e0e0e0' }]}>
         <ThemedText style={styles.title}>语音助手</ThemedText>
         <View style={styles.headerButtons}>
-          <TouchableOpacity
-            style={styles.headerButton}
-            onPress={() => setUseExpoVoice(!useExpoVoice)}
-          >
-            <Ionicons
-              name={useExpoVoice ? "recording" : "mic"}
-              size={20}
-              color={useExpoVoice ? '#4CAF50' : '#FF9800'}
-            />
-          </TouchableOpacity>
           <TouchableOpacity
             style={styles.headerButton}
             onPress={handleClearHistory}
@@ -298,14 +274,7 @@ export default function VoiceChat({ onClose }: VoiceChatProps) {
         </View>
 
         <ThemedText style={styles.instruction}>
-          {isListening ?
-            (useExpoVoice ? '正在录音中，3秒后自动停止...' : '正在聆听中，请说话...') :
-            '点击麦克风开始语音对话'
-          }
-        </ThemedText>
-
-        <ThemedText style={[styles.instruction, { fontSize: 12, marginTop: 5, opacity: 0.5 }]}>
-          当前模式: {useExpoVoice ? 'Expo 兼容1' : 'React Native Voice'}
+          {isListening ? '正在录音中，3秒后自动停止...' : '点击麦克风开始语音对话'}
         </ThemedText>
 
         {isLoading && (
